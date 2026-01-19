@@ -1,0 +1,161 @@
+# LUẬT BẤT KHẢ XÂM PHẠM CHO DỰ ÁN QUỐC VIỆT SUPER APP (ANTIGRAVITY EDITION)
+
+**Vai trò:** Senior React Native Architect & Compliance Officer.
+**Môi trường:** Google Gemini Antigravity (Linux Cloud) & Expo Go.
+**Mục tiêu:** Build thành công ngay lần đầu, chạy mượt trên Expo Go, Pass Store Review 100%.
+
+---
+
+## 1. QUY TẮC MÔI TRƯỜNG & THƯ VIỆN (ZERO CRASH POLICY)
+
+> **CẢNH BÁO ĐỎ:** Môi trường này KHÔNG hỗ trợ Native Build tùy chỉnh.
+> Bất kỳ vi phạm nào dưới đây sẽ khiến App CRASH ngay lập tức.
+
+1.  **CẤM TUYỆT ĐỐI `react-native-mmkv`:**
+    * Lý do: Thư viện này dùng JSI/C++, không chạy được trên Expo Go Standard.
+    * Thay thế bắt buộc:
+        * Token/Password: Dùng `expo-secure-store`.
+        * Cache/Config: Dùng `@react-native-async-storage/async-storage`.
+
+2.  **HẠN CHẾ IMAGE LIBRARY:**
+    * Cấm `react-native-fast-image`.
+    * Sử dụng: `expo-image` (Tương thích tốt nhất) hoặc `Image` chuẩn của React Native.
+
+3.  **QUẢN LÝ BIẾN MÔI TRƯỜNG:**
+    * Tạo file `src/config/env.ts` dùng `zod` để validate.
+    * Nếu thiếu `EXPO_PUBLIC_API_URL`, App phải **Throw Error** ngay khi khởi động (Fail Fast).
+
+Nếu AI tự ý import các thư viện này, hãy tự động thay thế bằng giải pháp bên cạnh:
+* ⛔ `react-native-mmkv` -> ✅ Thay bằng: `expo-secure-store` (Token) & `@react-native-async-storage/async-storage` (Cache).
+* ⛔ `react-native-fast-image` -> ✅ Thay bằng: `expo-image`.
+* ⛔ `react-native-vector-icons` -> ✅ Thay bằng: `lucide-react-native` (SVG Icons).
+---
+
+## 2. QUY TẮC TUÂN THỦ STORE (STORE COMPLIANCE - FIRST PRIORITY)
+
+> **MỆNH LỆNH:** AI phải code các tính năng này TRƯỚC khi code logic nghiệp vụ.
+> Thiếu 1 trong 3 điều này = DỰ ÁN THẤT BẠI.
+
+1.  **QUYỀN RIÊNG TƯ (APPLE & GOOGLE):**
+    * **Prominent Disclosure (Google):** Trước khi gọi `requestForegroundPermissionsAsync` (Location/Camera), PHẢI hiển thị một Modal giải thích rõ ràng: "App cần quyền này để [Mục đích cụ thể]". Chỉ khi user bấm "Đồng ý" trên Modal mới được gọi API hệ thống.
+    * **Permission Guards:** Luôn kiểm tra `status === 'granted'` trước khi thực thi logic. Nếu bị từ chối, phải hiện hướng dẫn User vào Cài đặt để mở lại.
+
+2.  Apple Guideline 5.1.1 (Xóa tài khoản)
+    Bắt buộc: Màn hình ProfileScreen phải có nút "Yêu cầu xóa tài khoản" (Màu đỏ/Cảnh báo).
+    Logic:
+    * Hiển Modal xác nhận: "Dữ liệu sẽ bị xóa sau 30 ngày".
+    * Gọi API DELETE /account (hoặc soft-delete).
+    * Logout và xóa sạch Token ngay lập tức.
+
+3.  Google Play Policy (Dữ liệu Vị trí)
+    * Prominent Disclosure (Công bố nổi bật):
+    * TRƯỚC KHI gọi Location.requestForegroundPermissionsAsync(), BẮT BUỘC phải hiện một Modal Custom của App.
+    * Nội dung: "Quốc Việt Super App thu thập dữ liệu vị trí để hỗ trợ tính năng Chấm công ngay cả khi ứng dụng đóng."
+    * Chỉ khi User bấm nút "Đồng ý" trên Modal -> Mới được gọi API xin quyền hệ thống.
+
+4.  **AN TOÀN DỮ LIỆU:**
+    * Không bao giờ log `access_token` hay `password` ra Console.
+    * Sử dụng `SecureStore` cho mọi dữ liệu định danh.
+
+---
+
+## 3. KIẾN TRÚC OFFLINE-FIRST (NO-DB STRATEGY)
+Mục tiêu: App vẫn hoạt động (Xem task, Check-in) khi mất mạng mà không cần SQLite.
+
+3.1. Cấu hình TanStack Query
+    * Sử dụng createAsyncStoragePersister để tự động lưu Cache API vào ổ cứng.
+    * gcTime: 24h (Giữ dữ liệu 1 ngày).
+    * networkMode: 'offlineFirst' (Cho phép gọi mutation khi không có mạng).
+
+3.2. Logic "Optimistic UI"
+    * Khi User tạo Task hoặc Check-in:
+    * Cập nhật UI ngay lập tức (như thể đã thành công).
+    * React Query sẽ tự động queue request.
+    * Khi có mạng -> React Query tự động gửi request đi.
+    * Tuyệt đối không chặn User bằng thông báo "Vui lòng kiểm tra kết nối Internet".
+
+## 4. KIẾN TRÚC "ZERO TRUST" AUTHENTICATION
+
+1.  **Tách biệt Token & User:**
+    * API Login chỉ trả về `access_token`.
+    * Sau khi có Token, App phải gọi ngay `GET /me` để lấy thông tin User và quyền hạn.
+    * Access Token / Refresh Token: BẮT BUỘC lưu trong expo-secure-store.
+    * User Info / Settings: Lưu trong AsyncStorage.
+
+2.  **Kiểm tra trạng thái cấm (Ban Hammer):**
+    * Sau khi Login lấy được Token -> Gọi ngay API GET /me.
+    * Kiểm tra field is_deleted hoặc is_banned.
+    * Nếu true -> Force Logout ngay lập tức (Xóa Token, đá về Login).
+---
+
+## 5. CHIẾN LƯỢC SDUI (SERVER-DRIVEN UI) TỐI GIẢN
+
+1.  **Phạm vi:** Chỉ áp dụng SDUI cho màn hình **Home (Dashboard)**. Các màn hình chức năng (Task, Check-in) code cứng (Native Screens) để đảm bảo performance và tiến độ.
+2.  **Cấu trúc Widget:**
+    * Định nghĩa `WidgetRegistry` map string (JSON Type) sang Component.
+    * **Fail Safe:** Nếu JSON trả về Widget lạ chưa code -> **Ẩn đi** (return null), không được làm Crash App.
+3.  **Default Config:** Luôn có file `home.default.json` trong code. Nếu mất mạng hoặc API lỗi, load file này lên để User không thấy màn hình trắng.
+
+---
+
+## 6. CẤU TRÚC THƯ MỤC CHUẨN (CLEAN ARCHITECTURE)
+
+```text
+src/
+├── app/                        # Expo Router (Màn hình chính)
+│   ├── (tabs)/                 # Tab Navigation (Home, Apps, Profile...)
+│   ├── _layout.tsx             # Root Provider (QueryClient, AuthProvider)
+│   └── index.tsx               # Splash Screen (Kiểm tra Login & Load Config)
+├── config/                     # Cấu hình "Zero Bug"
+│   ├── env.ts                  # Validate biến môi trường bằng Zod
+│   └── app-config.ts           # Config Mock/Real, Timeouts
+├── core/                       # Hạt nhân hệ thống
+│   ├── networking/             # Axios Instance & Interceptors [cite: 11]
+│   ├── sdui/                   # SDUI ENGINE
+│   │   ├── components/         # Các Widget (Header, Grid...)
+│   │   ├── LayoutEngine.tsx    # Component loop qua mảng layout
+│   │   └── action-handler.ts   # Xử lý logic khi bấm nút (Navi/Link)
+│   └── storage/                # MMKV Wrapper (Lưu Token, Cache) [cite: 34]
+├── components/                 # UI Blocks (Atomic)
+│   ├── ui/                     # Base UI (Từ App.js)
+│   │   ├── GlassCard.tsx       # Hiệu ứng kính [App.js]
+│   │   ├── DynamicIcon.tsx     # Xử lý Icon ảnh/Lucide
+│   │   └── BottomSheet.tsx     # Modal trượt [App.js]
+├── modules/                    # Logic nghiệp vụ (Domain)
+│   ├── auth/                   # Module Xác thực
+│   │   ├── auth.repo.ts        # Interface Repository
+│   │   ├── auth.mock.ts        # Mock Data (Login JSON)
+│   │   └── auth.service.ts     # Logic
+│   ├── attendance/             # Module Chấm công
+│   │   └── ... (CameraView, Location Logic)
+│   └── request/                # Module Đơn từ
+└── types/                      # Type định nghĩa toàn cục
+
+```
+
+---
+
+## 7. QUY TRÌNH KIỂM TRA LỖI (DEBUGGING PROTOCOL)
+
+1.  **Debugging:**
+    * Luôn dùng `console.log` để debug thay vì `console.error`.
+    * Sử dụng `console.error` chỉ khi có lỗi nghiêm trọng (crash app).
+    * Luôn có file `src/config/env.ts` dùng `zod` để validate.
+    * Nếu thiếu `EXPO_PUBLIC_API_URL`, App phải **Throw Error** ngay khi khởi động (Fail Fast).
+
+    * Khi gặp lỗi, AI phải kiểm tra theo thứ tự:
+    * Lỗi Import: Có đang import thư viện Native (MMKV, Realm) không? -> Xóa ngay.
+    * Lỗi API: Server có trả về đúng JSON Contract không? -> Kiểm tra Network Tab (Log).
+    * Lỗi UI: Có đang dùng thẻ <View> bao quanh <FlashList> mà không có flex: 1 không? (Lỗi phổ biến gây mất list).
+
+---
+
+## 8. HƯỚNG DẪN TRIỂN KHAI (STEP-BY-STEP)
+Bước 1 (Base): Cài đặt thư viện theo danh sách "Safe List" (Chỉ Expo Go compatible). Setup NativeWind v4.
+Bước 2 (Compliance): Code màn hình Login và Profile (có nút Xóa tài khoản). Setup SecureStore.
+Bước 3 (Auth): Code luồng Login -> Get Profile -> Check is_deleted.
+Bước 4 (Home): Code LayoutEngine đơn giản và WidgetRegistry.
+Bước 5 (Feature): Code module Chấm công (Kèm Modal xin quyền Vị trí).
+GHI CHÚ QUAN TRỌNG: Nếu gặp lỗi liên quan đến Native Module (như missing realm constructor), hãy kiểm tra lại xem có lỡ tay cài thư viện không hỗ trợ Expo Go hay không.
+
+> *"Dựa trên quy tắc trong .cursorrules, hãy triển khai module [Tên Module]. Nhớ kiểm tra kỹ các quy tắc về Compliance và Expo Go Compatibility."*
