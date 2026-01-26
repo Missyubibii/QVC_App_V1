@@ -34,9 +34,9 @@ export function useAppNavigation() {
 
         // Perform navigation
         if (params) {
-            router.push({ pathname: route, params });
+            router.push({ pathname: route as any, params });
         } else {
-            router.push(route);
+            router.push(route as any);
         }
     };
 
@@ -57,9 +57,9 @@ export function useAppNavigation() {
         console.log(`[Navigation] Replacing ${pathname} with ${route}`);
         try {
             if (params) {
-                router.replace({ pathname: route, params });
+                router.replace({ pathname: route as any, params });
             } else {
-                router.replace(route);
+                router.replace(route as any);
             }
         } catch (error) {
             console.warn('[Navigation] Replace failed:', error);

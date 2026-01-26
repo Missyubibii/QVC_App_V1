@@ -1,18 +1,5 @@
 import { apiClient } from './client';
-
-export interface LoginResponse {
-    token: string;
-    user: {
-        id: number;
-        code: string;
-        name: string;
-        email: string;
-        avatar?: string;
-        position?: string;
-    };
-    expires_in?: number;
-    token_type?: string;
-}
+import { LoginResponseSchema, type LoginResponse } from '../schemas/auth.schema';
 
 export interface LoginRequest {
     email?: string;
@@ -21,36 +8,35 @@ export interface LoginRequest {
     username?: string;
 }
 
-// Internal interface for backend response structure
-interface BackendLoginResponse {
-    code: number;
-    status: string;
-    message: string;
-    data: {
-        access_token: string;
-        expires_in: number;
-        token_type: string;
-        user: any;
-    };
-    trace_id: string;
-}
-
 export const authApi = {
     login: async (credentials: LoginRequest): Promise<LoginResponse> => {
-        const response = await apiClient.post<BackendLoginResponse>('/auth/login', credentials);
+        // ✅ Gọi đúng endpoint backend: /app/login (không phải /auth/login)
+        const response = await apiClient.post('/app/login', credentials);
         const body = response.data;
 
-        // Check if authentication was actually successful
-        if (body.code === 200 && body.data?.access_token) {
-            return {
-                token: body.data.access_token,
-                user: body.data.user,
-                expires_in: body.data.expires_in,
-                token_type: body.data.token_type
-            };
-        }
+        // ✅ Zod validation - Fail fast nếu backend trả về sai format
+        try {
+            const validated = LoginResponseSchema.parse(body);
 
-        throw new Error(body.message || 'Back-end returned unsuccessfull code');
+            // ✅ Transform sang format frontend cần (convert null → undefined)
+            return {
+                token: validated.data.access_token,
+                user: {
+                    id: validated.data.user.id,
+                    code: validated.data.user.code,
+                    name: validated.data.user.name,
+                    email: validated.data.user.email,
+                    avatar: validated.data.user.avatar ?? undefined,
+                    position: validated.data.user.position ?? undefined,
+                },
+                expires_in: validated.data.expires_in,
+                token_type: validated.data.token_type,
+            };
+        } catch (error: any) {
+            console.error('[Auth API] ❌ Response validation failed:', error.message);
+            console.error('[Auth API] Received:', JSON.stringify(body, null, 2));
+            throw new Error('Backend trả về response không đúng format. Check console logs.');
+        }
     },
 
     updateProfile: async (data: { name?: string; email?: string; phone?: string; avatar?: string }): Promise<any> => {

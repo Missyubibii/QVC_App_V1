@@ -1,8 +1,10 @@
-import { registerRootComponent } from 'expo';
+/**
+ * Entry point for Expo Router
+ * Import các global polyfills hoặc configurations ở đây
+ */
 
-import App from './App';
+// ⚠️ REMOVED: validateEnv() - Gây crash TRƯỚC React runtime init
+// TODO: Move validation vào App root component với try-catch
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
-registerRootComponent(App);
+// ✅ Expo Router Entry Point
+import 'expo-router/entry';
