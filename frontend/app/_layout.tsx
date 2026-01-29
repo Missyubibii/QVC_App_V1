@@ -1,27 +1,23 @@
-import { Stack } from 'expo-router';
-import { QueryProvider } from '@/core/providers/QueryProvider';
-import { ATTProvider } from '@/core/providers/ATTProvider';
-import { useAuthGuard } from '@/core/router/navigator';
-import React from 'react';
+/**
+ * Root Layout - Minimal Test Version
+ * 
+ * Temporarily simplified to test core sync infrastructure
+ */
 
-// Separate component for AuthGuard to ensure hooks run inside providers
-function AuthGuardWrapper({ children }: { children: React.ReactNode }) {
-    useAuthGuard();
-    return <>{children}</>;
-}
+import { Stack } from 'expo-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@/core/query-client';
+import React from 'react';
+import '../global.css';
 
 export default function RootLayout() {
     return (
-        <QueryProvider>
-            <ATTProvider>
-                <AuthGuardWrapper>
-                    <Stack screenOptions={{ headerShown: false }}>
-                        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-                        <Stack.Screen name="(main)" options={{ headerShown: false }} />
-                        <Stack.Screen name="+not-found" />
-                    </Stack>
-                </AuthGuardWrapper>
-            </ATTProvider>
-        </QueryProvider>
+        <QueryClientProvider client={queryClient}>
+            <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                <Stack.Screen name="(main)" options={{ headerShown: false }} />
+                <Stack.Screen name="+not-found" />
+            </Stack>
+        </QueryClientProvider>
     );
 }
