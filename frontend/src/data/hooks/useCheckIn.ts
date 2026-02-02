@@ -1,224 +1,123 @@
-/**
- * Check-in Hook
- * 
- * Business logic hook cho tính năng chấm công.
- * Orchestrate giữa Location, Network, API và Sync Queue.
- * 
- * Flow:
- * 1. Lấy location (useSafeLocation)
- * 2. Tạo UUID (expo-crypto)
- * 3. Check network (expo-network)
- * 4. Nếu online → Gửi API ngay
- * 5. Nếu offline hoặc API fail (5xx) → Lưu queue
- * 6. Return UI state tương ứng
- */
-
-import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import * as Crypto from 'expo-crypto';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import * as Network from 'expo-network';
-import { Platform } from 'react-native';
-import * as Device from 'expo-device';
+import { Alert } from 'react-native';
+import { AttendanceApi, Office } from '@/data/api/attendance.api';
+import { LocationService } from '@/core/hardware/location';
+import { OfflineQueueService } from '@/data/services/offline-queue';
+import { haversine } from '@/utils/geo';
+import { useState, useEffect, useCallback } from 'react';
 
-import { useSafeLocation } from '@/core/hardware';
-import { SyncQueue } from '@/core/sync';
-import { AttendanceAPI } from '@/data/api/attendance.api';
-import type { CheckInPayload, CheckInResponse } from '@/data/api/attendance.api';
 
-/**
- * Check-in result (discriminated union)
- */
-type CheckInResult =
-    | { mode: 'online'; data: CheckInResponse }
-    | { mode: 'offline'; queue_id: string }
-    | { mode: 'queued'; queue_id: string; reason: string };
+const generateUUID = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+};
 
-/**
- * Hook useCheckIn
- * 
- * @example
- * const { checkIn, isLoading, data, error } = useCheckIn();
- * 
- * const handlePress = async () => {
- *   try {
- *     await checkIn();
- *     if (data?.mode === 'online') {
- *       Alert.alert('Thành công!');
- *     } else {
- *       Alert.alert('Đã lưu offline');
- *     }
- *   } catch (err) {
- *     Alert.alert('Lỗi', err.message);
- *   }
- * };
- */
-export const useCheckIn = () => {
-    const { getLocation } = useSafeLocation();
-    const [queueId, setQueueId] = useState<string | null>(null);
+export function useCheckIn() {
+    const queryClient = useQueryClient();
 
-    const mutation = useMutation<CheckInResult, Error>({
-        mutationFn: async (): Promise<CheckInResult> => {
-            // ============================================================
-            // STEP 1: LẤY LOCATION
-            // ============================================================
-            console.log('[useCheckIn] Step 1: Fetching location...');
+    // 1. STATE QUẢN LÝ
+    const [currentOffice, setCurrentOffice] = useState<Office | null>(null);
+    const [isValidLocation, setIsValidLocation] = useState(false);
+    const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
 
-            const locationResult = await getLocation();
+    // 2. FETCH CONFIG TỪ SERVER (React Query)
+    const { data: config } = useQuery({
+        queryKey: ['attendanceConfig'],
+        queryFn: AttendanceApi.getAttendanceConfig,
+        staleTime: 1000 * 60 * 60, // 1 hour
+    });
 
-            if (!locationResult.success) {
-                throw new Error(`LOCATION_ERROR: ${locationResult.error}`);
-            }
+    // 3. LOGIC TỰ ĐỘNG VALIDATE (REACTIVE)
+    // Tự động chạy lại mỗi khi:
+    // - Có tọa độ người dùng mới (userLocation)
+    // - HOẶC Danh sách văn phòng mới tải về xong (config.offices)
+    useEffect(() => {
+        if (!userLocation || !config?.offices) return;
 
-            const { latitude, longitude, accuracy, is_mock } = locationResult.data;
+        let bestOffice: Office | null = null;
+        let minDistance = Infinity;
 
-            console.log(
-                `[useCheckIn] Location acquired: (${latitude}, ${longitude}) | ` +
-                `Mock: ${is_mock}`
+        config.offices.forEach((office) => {
+            const distance = haversine(
+                userLocation.latitude,
+                userLocation.longitude,
+                office.lat,
+                office.long
             );
 
-            // ============================================================
-            // STEP 2: TẠO PAYLOAD
-            // ============================================================
-            const uuid = Crypto.randomUUID();
-            const timestamp = new Date().toISOString();
-            const device_timestamp = Date.now();
+            // Kiểm tra bán kính
+            if (distance <= office.radius) {
+                // Nếu có nhiều văn phòng chồng lấn, lấy cái gần nhất
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    bestOffice = office;
+                }
+            }
+        });
 
-            const payload: CheckInPayload = {
-                uuid,
-                latitude,
-                longitude,
-                accuracy,
-                timestamp,
-                device_timestamp,
-                is_mock,
-                device_info: {
-                    model: Device.modelName ?? 'Unknown',
-                    os: Platform.OS,
-                },
-                // TODO: Lấy BSSID WiFi nếu backend yêu cầu
-                // bssid: await getWifiBSSID(),
+        // Cập nhật State kết quả
+        if (bestOffice) {
+            setIsValidLocation(true);
+            setCurrentOffice(bestOffice);
+        } else {
+            setIsValidLocation(false);
+            setCurrentOffice(null);
+        }
+
+    }, [userLocation, config?.offices]); // <--- Dependency Array quan trọng
+
+    // 4. HÀM NHẬN VỊ TRÍ TỪ UI
+    // UI chỉ cần ném tọa độ vào đây, useEffect bên trên sẽ lo phần tính toán
+    const validateLocation = useCallback((lat: number, long: number) => {
+        setUserLocation({ latitude: lat, longitude: long });
+    }, []);
+
+    // 5. GỬI API CHẤM CÔNG
+    const mutation = useMutation({
+        mutationFn: async ({ location, photo }: { location: any, photo: any }) => {
+            if (!currentOffice) throw new Error('Vị trí không hợp lệ');
+
+            // Build Payload (Thêm address và office_id để Backend lưu log chi tiết)
+            const payload = {
+                ...AttendanceApi.createPayload(location, photo),
+                address: currentOffice.address,
+                office_id: currentOffice.id,
+                uuid: generateUUID(), // Dùng hàm tạo 36 ký tự
             };
 
-            console.log(`[useCheckIn] Payload created | UUID: ${uuid}`);
-
-            // ============================================================
-            // STEP 3: CHECK NETWORK
-            // ============================================================
-            console.log('[useCheckIn] Step 3: Checking network...');
-
-            const networkState = await Network.getNetworkStateAsync();
-            const isOnline = networkState.isConnected && networkState.isInternetReachable;
-
-            console.log(
-                `[useCheckIn] Network state: ${isOnline ? 'Online' : 'Offline'} | ` +
-                `Type: ${networkState.type}`
-            );
-
-            // ============================================================
-            // STEP 4a: OFFLINE → QUEUE NGAY
-            // ============================================================
-            if (!isOnline) {
-                console.log('[useCheckIn] Offline detected, enqueueing...');
-
-                const id = await SyncQueue.enqueue(payload);
-                setQueueId(id);
-
-                return {
-                    mode: 'offline',
-                    queue_id: id,
-                };
+            // Kiểm tra mạng
+            const netStatus = await Network.getNetworkStateAsync();
+            if (!netStatus.isConnected || !netStatus.isInternetReachable) {
+                await OfflineQueueService.addToQueue(payload);
+                throw new Error('OFFLINE_SAVED');
             }
 
-            // ============================================================
-            // STEP 4b: ONLINE → GỬI API
-            // ============================================================
-            console.log('[useCheckIn] Online, sending API request...');
-
-            try {
-                const response = await AttendanceAPI.checkIn(payload);
-
-                console.log(
-                    `[useCheckIn] ✅ API success | ` +
-                    `Type: ${response.data.type} | ` +
-                    `Status: ${response.data.status}`
-                );
-
-                return {
-                    mode: 'online',
-                    data: response,
-                };
-
-            } catch (error: any) {
-                console.error('[useCheckIn] ❌ API error:', error.message);
-
-                // CRITICAL: Phân loại lỗi
-
-                // Case 1: Server error (5xx) → Queue để retry
-                if (error.response?.status >= 500) {
-                    console.log('[useCheckIn] Server error, enqueueing for retry...');
-
-                    const id = await SyncQueue.enqueue(payload);
-                    setQueueId(id);
-
-                    return {
-                        mode: 'queued',
-                        queue_id: id,
-                        reason: 'Server error, will retry automatically',
-                    };
-                }
-
-                // Case 2: Client error (400, 401, 403, 422)
-                // → KHÔNG queue, báo lỗi cho user ngay
-                if (error.response?.status >= 400 && error.response?.status < 500) {
-                    const serverMessage = error.response?.data?.message || error.message;
-                    throw new Error(serverMessage);
-                }
-
-                // Case 3: Network error (timeout, DNS fail)
-                // → Queue
-                if (!error.response) {
-                    console.log('[useCheckIn] Network error, enqueueing...');
-
-                    const id = await SyncQueue.enqueue(payload);
-                    setQueueId(id);
-
-                    return {
-                        mode: 'queued',
-                        queue_id: id,
-                        reason: 'Network error, will retry when online',
-                    };
-                }
-
-                // Case 4: Unknown error
-                throw error;
+            // Gửi Online
+            return await AttendanceApi.checkIn(payload);
+        },
+        onError: (error: any) => {
+            if (error.message === 'OFFLINE_SAVED') {
+                Alert.alert('Đã lưu Offline', 'Dữ liệu sẽ tự động gửi khi có mạng.');
+            } else {
+                Alert.alert('Lỗi chấm công', error.message || 'Vui lòng thử lại');
             }
         },
-
-        // React Query options
-        retry: false, // Không retry tự động (đã có custom logic)
-        networkMode: 'always', // Cho phép chạy kể cả offline
+        onSuccess: () => {
+            Alert.alert('Thành công', `Đã chấm công tại: ${currentOffice?.name}`);
+            queryClient.invalidateQueries({ queryKey: ['attendance'] });
+        },
     });
 
     return {
-        /** Hàm chấm công */
-        checkIn: mutation.mutate,
-
-        /** Hàm chấm công async (cho try-catch) */
-        checkInAsync: mutation.mutateAsync,
-
-        /** Loading state */
-        isLoading: mutation.isPending,
-
-        /** Error (chỉ có khi là client error) */
-        error: mutation.error,
-
-        /** Result data */
-        data: mutation.data,
-
-        /** Queue ID (nếu đã lưu offline) */
-        queueId,
-
-        /** Reset state */
-        reset: mutation.reset,
+        ...mutation,
+        offices: config?.offices || [],
+        currentOffice,
+        isValidLocation,
+        userLocation, // Trả về để UI hiển thị debug
+        validateLocation
     };
-};
+}

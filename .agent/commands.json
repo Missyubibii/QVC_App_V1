@@ -1,0 +1,199 @@
+{
+    "projectName": "Qvc App",
+    "version": "1.0.0",
+    "description": "Command shortcuts for AI Agent to execute skills and common tasks",
+    "memory": {
+        "techStack": {
+            "framework": "Expo SDK 54 (Managed Workflow)",
+            "language": "TypeScript (Strict Mode)",
+            "styling": "NativeWind v4 (Tailwind CSS)",
+            "state": "Zustand + TanStack Query",
+            "backend": "Laravel 12 (API Envelope Structure)"
+        },
+        "criticalRules": [
+            "Antigravity Guard: Luôn kiểm tra Platform.OS === 'web' trước khi gọi Native Modules",
+            "Fail-Fast: Validate Env bằng Zod. Validate API Response bằng Zod",
+            "Clean Architecture: UI → Hook → API Service → client.ts",
+            "Compliance: Luôn hỗ trợ Delete Account và Permission Priming"
+        ],
+        "deploymentConstraints": {
+            "androidPackage": "com.qvc.qvcapp",
+            "buildFormat": ".aab (Android App Bundle)",
+            "security": "No console.log with sensitive data"
+        }
+    },
+    "commands": [
+        {
+            "name": "/init",
+            "description": "Khởi tạo dự án: Cài đặt Expo SDK 54, NativeWind, Env Validation",
+            "skill": "setup-foundation",
+            "path": ".agent/skills/setup-foundation/SKILL.md",
+            "steps": [
+                "Validate package.json dependencies",
+                "Setup Zod environment validation",
+                "Configure TypeScript path aliases",
+                "Create Root Layout (_layout.tsx) with Providers",
+                "Setup Git configuration"
+            ]
+        },
+        {
+            "name": "/core",
+            "description": "Xây dựng lõi: Networking (Axios), Storage (Secure), Hardware Guard",
+            "skill": "implement-core",
+            "path": ".agent/skills/implement-core/SKILL.md",
+            "steps": [
+                "Create Smart Storage facade (auto stringify/parse)",
+                "Setup Axios client with envelope unwrapping",
+                "Implement 401 Kill Switch",
+                "Create Hardware Guard for Antigravity"
+            ]
+        },
+        {
+            "name": "/auth",
+            "description": "Xây dựng Auth: Login, Zod Validation, Social Login, Permission Priming",
+            "skill": "implement-auth",
+            "path": ".agent/skills/implement-auth/SKILL.md",
+            "steps": [
+                "Create Auth API with Zod schemas",
+                "Setup Social Login services (Google/Apple)",
+                "Implement Biometric authentication",
+                "Create AuthProvider with Kill Switch",
+                "Build Permission Priming screen",
+                "Add Account Deletion (Apple compliance)"
+            ]
+        },
+        {
+            "name": "/sdui",
+            "description": "Xây dựng Server-Driven UI Engine và Block Registry",
+            "skill": "implement-sdui",
+            "path": ".agent/skills/implement-sdui/SKILL.md",
+            "steps": [
+                "Define SDUI type definitions",
+                "Create Component Registry (Mapping Pattern)",
+                "Build SDUI Engine with fail-safe rendering",
+                "Implement recursive block handling",
+                "Create Screen Loader"
+            ]
+        },
+        {
+            "name": "/hrm",
+            "description": "Xây dựng Chấm công: GPS Anti-cheat, Offline Queue",
+            "skill": "implement-hrm",
+            "path": ".agent/skills/implement-hrm/SKILL.md",
+            "steps": [
+                "Create Location Service with Antigravity guard",
+                "Create Camera Service with mock support",
+                "Build Attendance API layer",
+                "Implement Offline Queue with TanStack Query",
+                "Create Check-in/Check-out screens"
+            ]
+        },
+        {
+            "name": "/sentinel",
+            "description": "Chạy kiểm tra an toàn trước khi Deploy (Sentinel Mode)",
+            "skill": "deployment-check",
+            "path": ".agent/skills/deployment-check/SKILL.md",
+            "steps": [
+                "Run pre-flight-check.js script",
+                "Validate config integrity (google-services.json)",
+                "Check build format compliance (AAB)",
+                "Scan for hardcoded secrets",
+                "Validate iOS Privacy Manifest",
+                "Run TypeScript compilation check"
+            ],
+            "command": "npm run sentinel"
+        },
+        {
+            "name": "/build:dev",
+            "description": "Build Development version (iOS + Android)",
+            "command": "eas build --profile development --platform all",
+            "prerequisites": [
+                "Đã cấu hình eas.json",
+                "Đã login eas"
+            ]
+        },
+        {
+            "name": "/build:prod",
+            "description": "Build Production version (sau khi pass Sentinel)",
+            "command": "npm run build:prod",
+            "prerequisites": [
+                "Đã chạy /sentinel và pass",
+                "Version đã increment"
+            ]
+        },
+        {
+            "name": "/test:auth",
+            "description": "Test luồng Authentication",
+            "steps": [
+                "Test login với email/password",
+                "Test Permission Priming flow",
+                "Test 401 auto-logout",
+                "Test Account Deletion"
+            ]
+        },
+        {
+            "name": "/test:hrm",
+            "description": "Test module Chấm công",
+            "steps": [
+                "Test GPS mock trên Antigravity",
+                "Test Camera mock trên Antigravity",
+                "Test Offline Queue",
+                "Test Check-in/Check-out flow"
+            ]
+        },
+        {
+            "name": "/fix:types",
+            "description": "Fix TypeScript errors",
+            "command": "npx tsc --noEmit",
+            "action": "Show all TypeScript errors and fix them one by one"
+        },
+        {
+            "name": "/clean",
+            "description": "Clean cache và rebuild",
+            "commands": [
+                "rm -rf node_modules",
+                "npm install",
+                "npx expo start -c"
+            ]
+        }
+    ],
+    "workflows": {
+        "newFeature": [
+            "1. Đọc skill tương ứng",
+            "2. Tạo task.md với checklist",
+            "3. Implement theo từng PART",
+            "4. Run verification tests",
+            "5. Update walkthrough.md"
+        ],
+        "deployment": [
+            "1. Run /sentinel",
+            "2. Fix all errors",
+            "3. Increment version in app.json",
+            "4. Run /build:prod",
+            "5. Submit to stores"
+        ]
+    },
+    "quickReference": {
+        "skills": {
+            "setup-foundation": "Khởi tạo dự án",
+            "implement-core": "Networking + Storage",
+            "implement-auth": "Authentication",
+            "implement-sdui": "Server-Driven UI",
+            "implement-hrm": "Chấm công",
+            "deployment-check": "Pre-flight Check"
+        },
+        "criticalFiles": {
+            "env": "src/core/config/env.ts",
+            "storage": "src/core/storage/index.ts",
+            "apiClient": "src/core/api/client.ts",
+            "authProvider": "src/core/auth/AuthProvider.tsx",
+            "sduiEngine": "src/presentation/sdui/SDUIEngine.tsx"
+        },
+        "commonIssues": {
+            "TypeError: value must be string": "Use Smart Storage (auto stringify)",
+            "401 loop": "Check Kill Switch in client.ts",
+            "Crash on Antigravity": "Add Platform.OS === 'web' guard",
+            "google-services.json mismatch": "Download fresh from Firebase Console"
+        }
+    }
+}
