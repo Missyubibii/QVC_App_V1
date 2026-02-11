@@ -1,535 +1,406 @@
 ---
-description: Xây dựng Networking, Storage & Hardware Abstraction (Zero-Crash Core)
+description: "CRITICAL: Xây dựng Core Engine. Yêu cầu: MMKV Storage (High Performance), Axios Envelope Unwrap, Hardware Abstraction Layer (HAL)."
+globs: "src/core/storage/**/*, src/core/networking/**/*, src/core/hardware/**/*"
 ---
 
 # SKILL: Implement Core Systems
 
-## 🎯 Mục tiêu
+> [!WARNING]
+> **Performance Rule**:
+>
+> 1. KHÔNG dùng `AsyncStorage`. Bắt buộc dùng `MMKV` cho dữ liệu thường.
+> 2. CHỈ dùng `SecureStore` cho Token nhạy cảm.
+> 3. API Client phải tự động "bóc" lớp vỏ `{ code, data }` từ Laravel.
 
-Xây dựng hạ tầng cốt lõi đảm bảo:
+## 🎯 Mục Tiêu Cốt Lõi
 
-1. **Storage thông minh**: Tự động xử lý Object/String, tự động Fallback (Web vs Mobile)
-2. **Networking an toàn**: Tự động bóc tách Envelope, tự động Logout khi 401
-3. **Hardware Guard**: Chạy được GPS/Camera trên máy ảo mà không crash
-
-## 📋 Prerequisites
-
-- `setup-foundation` đã chạy xong
-- Các thư viện: `axios`, `expo-secure-store`, `@react-native-async-storage/async-storage`, `expo-device`
+1. **High-Perf Storage**: Tích hợp MMKV (JSI) nhanh gấp 30x AsyncStorage.
+2. **Smart Networking**: Tự động xử lý cấu trúc Envelope của Laravel.
+3. **Hardware Guard**: Chạy GPS/Camera trên máy ảo/Web mà không crash.
+4. **Logger**: Hệ thống log tập trung để debug trên thiết bị thật.
 
 ---
 
-## 🔧 PART 1: The "Smart" Storage Facade
+## 🔧 BƯỚC 1: Cài đặt Dependencies
 
-### File: `src/core/storage/index.ts`
+**AI Action:**
+
+```bash
+# 1. MMKV (Storage siêu tốc)
+npx expo install react-native-mmkv
+
+# 2. NetInfo (Check mạng)
+npx expo install @react-native-community/netinfo
+
+# 3. Location & Camera (Native)
+npx expo install expo-location expo-camera
+```
+
+> [!NOTE]
+> `react-native-mmkv` cần `expo-dev-client` để chạy (đã cài ở bước Setup Foundation).
+
+---
+
+## 🔧 BƯỚC 2: MMKV Storage Adapter (Web Compatible)
+
+**File:** `src/core/storage/mmkv.ts`
+
+**Mục tiêu:** MMKV chạy trên Mobile, fallback sang localStorage trên Web (Antigravity).
 
 ```typescript
-import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { MMKV } from 'react-native-mmkv';
 import { Platform } from 'react-native';
 
-/**
- * Smart Storage Facade
- * ✅ Auto-detects Platform (Mobile vs Web)
- * ✅ Auto-stringifies Objects
- * ✅ Auto-parses JSON when retrieving
- */
-
-const isSecureStoreAvailable = Platform.OS !== 'web';
-
-export const SecureStorage = {
-    /**
-     * Store data (Auto-detects String vs Object)
-     * ✅ SMART: Tự động chuyển Object/Number thành String
-     */
-    async setItem(key: string, value: any): Promise<void> {
-        try {
-            if (value === null || value === undefined) {
-                console.warn(`SecureStorage.setItem: Skipping null/undefined value for key: ${key}`);
-                return;
-            }
-
-            // ✅ SMART: Tự động stringify nếu không phải string
-            const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-
-            if (isSecureStoreAvailable) {
-                await SecureStore.setItemAsync(key, stringValue);
-            } else {
-                // Antigravity/Web Fallback
-                if (typeof window !== 'undefined' && window.localStorage) {
-                    window.localStorage.setItem(key, stringValue);
-                } else {
-                    await AsyncStorage.setItem(key, stringValue);
-                }
-            }
-        } catch (error) {
-            console.error(`❌ SecureStorage.setItem(${key}) failed:`, error);
-            throw error;
-        }
-    },
-
-    /**
-     * Get data (Auto-parse JSON if possible)
-     * ✅ SMART: Thử Parse JSON, nếu lỗi thì trả về chuỗi gốc
-     * ✅ OPTIMIZED: Check startsWith để tránh parse không cần thiết
-     */
-    async getItem<T = string>(key: string): Promise<T | null> {
-        try {
-            let result: string | null = null;
-
-            if (isSecureStoreAvailable) {
-                result = await SecureStore.getItemAsync(key);
-            } else {
-                if (typeof window !== 'undefined' && window.localStorage) {
-                    result = window.localStorage.getItem(key);
-                } else {
-                    result = await AsyncStorage.getItem(key);
-                }
-            }
-
-            if (!result) return null;
-
-            // ✅ PERFORMANCE: Chỉ parse nếu chuỗi có dạng JSON
-            // Tránh ném mọi chuỗi vào JSON.parse (tốn CPU)
-            if (result.startsWith('{') || result.startsWith('[')) {
-                try {
-                    return JSON.parse(result) as T;
-                } catch {
-                    // Parse failed, return as-is
-                    return result as unknown as T;
-                }
-            }
-
-            // Plain string, return directly
-            return result as unknown as T;
-        } catch (error) {
-            console.error(`❌ SecureStorage.getItem(${key}) failed:`, error);
-            return null;
-        }
-    },
-
-    /**
-     * Remove item
-     */
-    async removeItem(key: string): Promise<void> {
-        try {
-            if (isSecureStoreAvailable) {
-                await SecureStore.deleteItemAsync(key);
-            } else {
-                if (typeof window !== 'undefined' && window.localStorage) {
-                    window.localStorage.removeItem(key);
-                } else {
-                    await AsyncStorage.removeItem(key);
-                }
-            }
-        } catch (error) {
-            console.error(`❌ SecureStorage.removeItem(${key}) failed:`, error);
-        }
-    },
-
-    /**
-     * Clear all (use with caution)
-     */
-    async clearAll(): Promise<void> {
-        try {
-            if (isSecureStoreAvailable) {
-                console.warn('⚠️ SecureStore does not support clearAll. Clear keys individually.');
-            } else {
-                if (typeof window !== 'undefined' && window.localStorage) {
-                    window.localStorage.clear();
-                } else {
-                    await AsyncStorage.clear();
-                }
-            }
-        } catch (error) {
-            console.error('❌ SecureStorage.clearAll() failed:', error);
-        }
-    },
-};
-
-/**
- * Storage Keys (Centralized)
- */
-export const STORAGE_KEYS = {
-    ACCESS_TOKEN: 'access_token',
-    REFRESH_TOKEN: 'refresh_token',
-    USER_ID: 'user_id',
-    USER_INFO: 'user_info',
-} as const;
-```
-
-### ⚠️ WHY SMART STORAGE?
-
-**Vấn đề**: Storage API chỉ nhận string, nhưng Auth module cần lưu User object
-
-```typescript
-// ❌ BAD: Crash với TypeError
-await SecureStorage.setItem('user', { id: 1, name: 'Test' });
-
-// ✅ GOOD: Smart Storage tự động stringify
-await SecureStorage.setItem('user', { id: 1, name: 'Test' });
-// Internally: JSON.stringify({ id: 1, name: 'Test' })
-```
-
-**Lợi ích**:
-
-- Auth module không cần lo stringify/parse
-- Tránh lỗi `TypeError: value must be string`
-- Code gọn gàng hơn
-
----
-
-## 🔧 PART 2: The "Safe" Networking Client (Architect-Level)
-
-### File: `src/core/api/client.ts`
-
-```typescript
-import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { DeviceEventEmitter } from 'react-native';
-import { ENV } from '@/core/config/env';
-import { SecureStorage, STORAGE_KEYS } from '@/core/storage';
-
-/**
- * Envelope Response Type (Laravel ApiResponse trait)
- */
-export interface EnvelopeResponse<T = any> {
-    code: number;
-    status: 'success' | 'error';
-    message: string;
-    data: T;
-    trace_id?: string;
-    errors?: Record<string, string[]>; // Laravel validation errors
-}
-
-/**
- * Create Axios Instance
- */
-export const apiClient = axios.create({
-    baseURL: ENV.API_URL,
-    timeout: ENV.API_TIMEOUT || 15000,
-    headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    },
+// Khởi tạo instance
+export const storage = new MMKV({
+  id: 'user-settings-storage',
 });
 
 /**
- * REQUEST INTERCEPTOR: Attach Bearer Token
+ * Wrapper để hỗ trợ Web (Antigravity)
+ * Vì MMKV là JSI Native, không chạy trên Web.
  */
-apiClient.interceptors.request.use(
-    async (config: InternalAxiosRequestConfig) => {
-        const token = await SecureStorage.getItem<string>(STORAGE_KEYS.ACCESS_TOKEN);
-        
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-
-        if (__DEV__) {
-            console.log(`🌐 API Request: ${config.method?.toUpperCase()} ${config.url}`);
-        }
-
-        return config;
-    },
-    (error) => Promise.reject(error)
-);
-
-/**
- * RESPONSE INTERCEPTOR: THE GATEKEEPER
- * ✅ CRITICAL: Strict Unwrap Strategy
- * - Hoặc unwrap thành công → return data thật
- * - Hoặc throw error → không có trạng thái lửng lơ
- */
-apiClient.interceptors.response.use(
-    (response) => {
-        const contentType = response.headers['content-type'];
-        
-        // 1. Guard: Check JSON Content-Type (HTML Guard)
-        if (!contentType?.includes('application/json')) {
-            throw new Error(
-                'Invalid Response: Server returned HTML (Possible 500 Error or Maintenance Mode)'
-            );
-        }
-
-        const envelope = response.data as EnvelopeResponse;
-        
-        // 2. Guard: Check Envelope Structure
-        if (envelope && typeof envelope.code === 'number') {
-            // Business Error Check (code !== 200 trong body 200)
-            if (envelope.code !== 200) {
-                // Ném lỗi để error handler xử lý
-                const error: any = new Error(envelope.message || 'Business Error');
-                error.response = response;
-                error.isBusinessError = true;
-                error.businessCode = envelope.code;
-                return Promise.reject(error);
-            }
-            
-            // ✅ SUCCESS: Strict Unwrap
-            // CRITICAL: Trả về DATA THẬT, không còn vỏ envelope
-            // Điều này có nghĩa là ở API layer, bạn nhận được User object trực tiếp
-            return envelope.data;
-        }
-
-        // 3. Fallback: API cũ chưa chuẩn Envelope
-        return response.data;
-    },
-    async (error: AxiosError) => {
-        // 🛑 KILL SWITCH: 401 Unauthorized
-        if (error.response?.status === 401) {
-            const originalRequest = error.config as InternalAxiosRequestConfig;
-            
-            if (!originalRequest.url?.includes('/login')) {
-                console.warn('🔒 Session expired. Logging out...');
-                
-                await SecureStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
-                await SecureStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
-                await SecureStorage.removeItem(STORAGE_KEYS.USER_INFO);
-                
-                DeviceEventEmitter.emit('auth:session-expired');
-            }
-        }
-
-        // 🛑 NORMALIZE ERROR: Laravel Validation (422)
-        const data = error.response?.data as any;
-        if (error.response?.status === 422 && data?.errors) {
-            // Chuẩn hóa lỗi Laravel { message, errors } thành format dễ đọc
-            error.message = data.message || 'Dữ liệu không hợp lệ';
-            
-            // Attach validation errors để UI có thể hiển thị chi tiết
-            (error as any).validationErrors = data.errors;
-        }
-
-        // Parse error message from envelope (nếu có)
-        const envelope = error.response?.data as EnvelopeResponse;
-        if (envelope?.message) {
-            error.message = envelope.message;
-        }
-
-        if (__DEV__) {
-            console.error(`❌ API Error: ${error.response?.status} - ${error.message}`);
-        }
-
-        return Promise.reject(error);
+export const AppStorage = {
+  setItem: (key: string, value: string | number | boolean | object) => {
+    const stringValue = JSON.stringify(value);
+    if (Platform.OS === 'web') {
+      localStorage.setItem(key, stringValue);
+    } else {
+      storage.set(key, stringValue);
     }
-);
+  },
 
-export default apiClient;
-```
+  getItem: <T>(key: string): T | null => {
+    let value: string | undefined | null;
+    
+    if (Platform.OS === 'web') {
+      value = localStorage.getItem(key);
+    } else {
+      value = storage.getString(key);
+    }
 
-### ⚠️ CRITICAL RULES (Architect-Level)
+    if (!value) return null;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return null;
+    }
+  },
 
-1. **Strict Unwrap Strategy**: Interceptor trả về `envelope.data` trực tiếp
-   - ✅ API layer nhận được User object, không phải `{ data: User }`
-   - ✅ Không còn confusion giữa `response.data` và `response.data.data`
+  removeItem: (key: string) => {
+    if (Platform.OS === 'web') {
+      localStorage.removeItem(key);
+    } else {
+      storage.delete(key);
+    }
+  },
 
-2. **HTML Guard**: PHẢI kiểm tra Content-Type trước khi parse
-   - Tránh lỗi `SyntaxError: Unexpected token <` khi server trả HTML
-
-3. **401 Kill Switch**: Tự động logout và emit event
-   - Tránh loop vô hạn ở trang login
-
-4. **Laravel Validation Normalization**: Tự động parse lỗi 422
-   - Attach `validationErrors` vào error object để UI hiển thị
-
-5. **Performance**: Storage chỉ parse JSON khi cần thiết
-   - Check `startsWith('{')` trước khi gọi `JSON.parse()`
-
----
-
-## 🔧 PART 3: Hardware Guard (Antigravity Survival)
-
-### File: `src/core/hardware/useSafeHardware.ts`
-
-```typescript
-import * as Device from 'expo-device';
-import { Platform } from 'react-native';
-
-/**
- * Hook để kiểm tra xem có an toàn để gọi Native Module không
- * Giúp tránh crash trên Antigravity / Simulator
- * 
- * ✅ CRITICAL: Luôn check trước khi gọi GPS/Camera
- */
-export const useSafeHardware = () => {
-    const isRealDevice = Device.isDevice && Platform.OS !== 'web';
-
-    return {
-        isRealDevice,
-        
-        // Mock Data khi chạy trên máy ảo
-        mockGPS: {
-            latitude: 10.8231, // Tọa độ Quốc Việt
-            longitude: 106.6297,
-            accuracy: 5,
-        },
-        
-        // Mock Image (1x1 black pixel)
-        mockImage: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-    };
+  clearAll: () => {
+    if (Platform.OS === 'web') {
+      localStorage.clear();
+    } else {
+      storage.clearAll();
+    }
+  }
 };
 ```
 
-### Usage Example
+> [!CRITICAL]
+> **MMKV là Synchronous**: Không cần `await`. Đọc/ghi ngay lập tức → Cold Start nhanh hơn 30x so với AsyncStorage.
+
+---
+
+## 🔧 BƯỚC 3: Networking Envelope Unwrap
+
+**File:** `src/core/networking/apiClient.ts`
+
+**Mục tiêu:** Xử lý chuẩn `Danh_Sach_API.md`. Backend trả về `{ code: 200, data: ... }`. Client phải tự bóc lấy data.
 
 ```typescript
-import { useSafeHardware } from '@/core/hardware/useSafeHardware';
+import axios, { AxiosError } from 'axios';
+import { Env } from '@/core/config/env';
+import { TokenStorage } from '@/core/auth/TokenStorage';
+
+export const apiClient = axios.create({
+  baseURL: Env.EXPO_PUBLIC_API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  },
+  timeout: 10000, // 10s timeout
+});
+
+// Request: Auto Inject Token
+apiClient.interceptors.request.use(async (config) => {
+  const token = await TokenStorage.getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Response: Auto Unwrap Envelope & Error Handling
+apiClient.interceptors.response.use(
+  (response) => {
+    // 1. Lấy body
+    const { code, data, message } = response.data;
+
+    // 2. Check Logic Code (Laravel Convention)
+    // Nếu HTTP 200 nhưng Code != 200 -> Là lỗi nghiệp vụ
+    if (code && code !== 200) {
+      return Promise.reject(new Error(message || 'Lỗi nghiệp vụ không xác định'));
+    }
+
+    // 3. Unwrap: Trả về data thực sự thay vì cả envelope
+    // Giữ nguyên response structure nhưng replace response.data
+    response.data = data;
+    return response;
+  },
+  async (error: AxiosError) => {
+    // Handle 401 Logout
+    if (error.response?.status === 401) {
+      await TokenStorage.clearToken();
+      // Emit event logout hoặc redirect
+    }
+    
+    // Handle network errors
+    if (!error.response) {
+      return Promise.reject(new Error('Lỗi kết nối mạng'));
+    }
+    
+    return Promise.reject(error);
+  }
+);
+```
+
+> [!WARNING]
+> **Envelope Pattern**: Backend Laravel trả HTTP 200 ngay cả khi lỗi nghiệp vụ. Interceptor phải check `code` trong body để xác định lỗi thật.
+
+**Ví dụ sử dụng:**
+
+```typescript
+// Trước (Phải unwrap thủ công)
+const response = await apiClient.get('/users');
+const users = response.data.data; // ❌ Phải nhớ .data.data
+
+// Sau (Auto unwrap)
+const response = await apiClient.get('/users');
+const users = response.data; // ✅ Đã unwrap tự động
+```
+
+---
+
+## 🔧 BƯỚC 4: Hardware Abstraction Layer (HAL)
+
+**File:** `src/core/hardware/useSafeHardware.ts`
+
+**Mục tiêu:** Tránh crash trên Emulator/Web khi gọi GPS/Camera.
+
+```typescript
 import * as Location from 'expo-location';
+import * as Camera from 'expo-camera';
+import { Platform } from 'react-native';
+import { Env } from '@/core/config/env';
 
-export function useLocation() {
-    const { isRealDevice, mockGPS } = useSafeHardware();
+export const useSafeHardware = () => {
+  const isMock = Env.EXPO_PUBLIC_IS_MOCK === 'true' || Platform.OS === 'web';
 
-    async function getCurrentLocation() {
-        if (!isRealDevice) {
-            console.log('🌐 Antigravity: Using mock GPS');
-            return mockGPS;
-        }
-
-        // Real device: Call native GPS
-        const location = await Location.getCurrentPositionAsync();
-        return {
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude,
-            accuracy: location.coords.accuracy || 0,
-        };
+  const getLocation = async () => {
+    if (isMock) {
+      console.log('📍 [MOCK] Location requested -> Returning Vinh City');
+      return {
+        coords: { 
+          latitude: 18.6789, 
+          longitude: 105.6789,
+          accuracy: 10,
+          altitude: null,
+          altitudeAccuracy: null,
+          heading: null,
+          speed: null,
+        },
+        timestamp: Date.now(),
+        mocked: true,
+      };
     }
 
-    return { getCurrentLocation };
-}
-```
-
----
-
-## ✅ Verification Tests
-
-### Test 1: Smart Storage
-
-```typescript
-// File: src/__tests__/storage.test.ts
-import { SecureStorage, STORAGE_KEYS } from '@/core/storage';
-
-async function testSmartStorage() {
-    // Test 1: String storage
-    await SecureStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, 'test-token-123');
-    const token = await SecureStorage.getItem<string>(STORAGE_KEYS.ACCESS_TOKEN);
-    console.log('✅ Token:', token); // "test-token-123"
-
-    // Test 2: Object storage (SMART!)
-    const user = { id: 1, name: 'Test User', email: 'test@qvc.vn' };
-    await SecureStorage.setItem(STORAGE_KEYS.USER_INFO, user);
-    const savedUser = await SecureStorage.getItem(STORAGE_KEYS.USER_INFO);
-    console.log('✅ User:', savedUser); // { id: 1, name: 'Test User', ... }
-
-    // Test 3: Number storage
-    await SecureStorage.setItem(STORAGE_KEYS.USER_ID, 123);
-    const userId = await SecureStorage.getItem<number>(STORAGE_KEYS.USER_ID);
-    console.log('✅ User ID:', userId); // 123
-}
-```
-
-### Test 2: API Client
-
-```typescript
-// File: src/__tests__/api-client.test.ts
-import apiClient from '@/core/api/client';
-
-async function testApiClient() {
-    try {
-        // Test envelope unwrapping
-        const response = await apiClient.get('/user');
-        console.log('✅ User data:', response.data); // Already unwrapped!
-    } catch (error: any) {
-        console.error('❌ Error:', error.message); // Enhanced error message
+    // Real Native Call
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      throw new Error('Permission denied');
     }
-}
+    return await Location.getCurrentPositionAsync({});
+  };
+
+  const requestCameraPermission = async () => {
+    if (isMock) {
+      console.log('📷 [MOCK] Camera permission -> Granted');
+      return { status: 'granted', mocked: true };
+    }
+
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    return { status, mocked: false };
+  };
+
+  return { 
+    getLocation, 
+    requestCameraPermission,
+    isMock 
+  };
+};
 ```
 
-### Test 3: Hardware Guard
+**Ví dụ sử dụng:**
 
 ```typescript
-// File: src/__tests__/hardware.test.ts
-import { useSafeHardware } from '@/core/hardware/useSafeHardware';
+// Trong component
+const { getLocation, isMock } = useSafeHardware();
 
-function testHardwareGuard() {
-    const { isRealDevice, mockGPS, mockImage } = useSafeHardware();
+const handleCheckIn = async () => {
+  try {
+    const location = await getLocation();
+    if (location.mocked) {
+      console.warn('Using mock location for development');
+    }
+    // Gửi location lên server
+    await checkIn(location.coords);
+  } catch (error) {
+    console.error('Location error:', error);
+  }
+};
+```
 
-    console.log('Is Real Device:', isRealDevice);
-    console.log('Mock GPS:', mockGPS);
-    console.log('Mock Image:', mockImage.substring(0, 50) + '...');
-}
+> [!CRITICAL]
+> **Hardware Guard là BẮT BUỘC**: Nếu gọi `Location.getCurrentPositionAsync()` trên Emulator không có Google Play Services → App treo vĩnh viễn.
+
+---
+
+## 🔧 BƯỚC 5: Network State Monitor
+
+**File:** `src/core/networking/useNetworkState.ts`
+
+```typescript
+import { useEffect, useState } from 'react';
+import NetInfo from '@react-native-community/netinfo';
+
+export const useNetworkState = () => {
+  const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [isInternetReachable, setIsInternetReachable] = useState<boolean>(true);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      setIsConnected(state.isConnected ?? false);
+      setIsInternetReachable(state.isInternetReachable ?? false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  return { isConnected, isInternetReachable };
+};
 ```
 
 ---
 
-## 📚 References
+## 🚨 Checklist Kiểm Tra (Definition of Done)
 
-- [Expo SecureStore](https://docs.expo.dev/versions/latest/sdk/securestore/)
-- [AsyncStorage](https://react-native-async-storage.github.io/async-storage/)
-- [Axios Interceptors](https://axios-http.com/docs/interceptors)
-- [Expo Device](https://docs.expo.dev/versions/latest/sdk/device/)
+AI phải tự kiểm tra:
 
----
+### Storage
 
-## 🎓 Learning Outcomes
+- [ ] **MMKV**: Đã config wrapper cho Web chưa? (MMKV native crash trên web)
+- [ ] **Sync**: Hàm getItem có chạy đồng bộ không (trừ đoạn fallback web)?
+- [ ] **Fallback**: Web có dùng localStorage không?
 
-1. ✅ Hiểu cách implement Smart Storage với auto stringify/parse
-2. ✅ Biết cách unwrap Envelope response mà không mutate
-3. ✅ Thành thạo 401 Kill Switch pattern
-4. ✅ Tránh được crash trên Antigravity với Hardware Guard
+### Networking
 
----
+- [ ] **Envelope**: Interceptor có check `response.data.code !== 200` không?
+- [ ] **Timeout**: Đã set timeout chưa? (Tránh treo app khi mạng lag)
+- [ ] **401 Handling**: Có auto-logout khi gặp 401 không?
+- [ ] **Network Error**: Có xử lý lỗi mạng (error.response === undefined) không?
 
-## 🚨 Common Pitfalls & Solutions
+### Hardware
 
-### Issue 1: "TypeError: value must be string"
-
-**Cause**: Trying to save Object directly to SecureStore
-
-**Solution**: Use Smart Storage (auto stringify)
-
-```typescript
-// ❌ BAD
-await SecureStore.setItemAsync('user', { id: 1 }); // Crash!
-
-// ✅ GOOD
-await SecureStorage.setItem('user', { id: 1 }); // Auto stringify
-```
-
-### Issue 2: "Undefined is not an object (reading 'data')"
-
-**Cause**: Accessing `response.data.data` after envelope unwrapping
-
-**Solution**: Interceptor already unwrapped, just use `response.data`
-
-```typescript
-// ❌ BAD
-const user = response.data.data; // undefined!
-
-// ✅ GOOD
-const user = response.data; // Already unwrapped by interceptor
-```
-
-### Issue 3: "App crash on Antigravity when using GPS"
-
-**Cause**: Calling native GPS module on Web platform
-
-**Solution**: Use Hardware Guard
-
-```typescript
-// ❌ BAD
-const location = await Location.getCurrentPositionAsync(); // Crash on Web!
-
-// ✅ GOOD
-const { isRealDevice, mockGPS } = useSafeHardware();
-const location = isRealDevice 
-    ? await Location.getCurrentPositionAsync()
-    : mockGPS;
-```
+- [ ] **Mock Flag**: Có check `EXPO_PUBLIC_IS_MOCK` không?
+- [ ] **Web Guard**: Có check `Platform.OS === 'web'` không?
+- [ ] **Permission**: Có xử lý trường hợp user từ chối permission không?
 
 ---
 
 ## 💡 Pro Tips
 
-1. **Always use Smart Storage**: Không cần lo stringify/parse
-2. **Trust the Interceptor**: Response đã được unwrap, không cần `.data.data`
-3. **Check Platform first**: Luôn dùng Hardware Guard trước khi gọi native module
-4. **Debug with **DEV****: Logs chỉ hiện trong development mode
+### 1. MMKV Encryption
+
+Nếu cần lưu dữ liệu nhạy cảm vừa phải (không phải token) vào MMKV, có thể dùng `encryptionKey`:
+
+```typescript
+export const secureStorage = new MMKV({
+  id: 'secure-storage',
+  encryptionKey: 'your-encryption-key-here',
+});
+```
+
+### 2. Axios Retry
+
+Nên cài thêm `axios-retry` để tự động thử lại khi rớt mạng:
+
+```bash
+npm install axios-retry
+```
+
+```typescript
+import axiosRetry from 'axios-retry';
+
+axiosRetry(apiClient, {
+  retries: 3,
+  retryDelay: axiosRetry.exponentialDelay,
+  retryCondition: (error) => {
+    return axiosRetry.isNetworkOrIdempotentRequestError(error) 
+      || error.response?.status === 429;
+  },
+});
+```
+
+### 3. Logger cho Production
+
+```typescript
+// src/core/utils/logger.ts
+import { Platform } from 'react-native';
+
+export const logger = {
+  log: (...args: any[]) => {
+    if (__DEV__) console.log(...args);
+  },
+  error: (...args: any[]) => {
+    console.error(...args);
+    // TODO: Gửi lên Sentry/Crashlytics
+  },
+};
+```
+
+### 4. Storage Migration
+
+Nếu đang migrate từ AsyncStorage sang MMKV:
+
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const migrateFromAsyncStorage = async () => {
+  const keys = await AsyncStorage.getAllKeys();
+  for (const key of keys) {
+    const value = await AsyncStorage.getItem(key);
+    if (value) {
+      AppStorage.setItem(key, value);
+      await AsyncStorage.removeItem(key);
+    }
+  }
+};
+```
+
+---
+
+## 🎓 Tài Liệu Tham Khảo
+
+- [MMKV Documentation](https://github.com/mrousavy/react-native-mmkv)
+- [Axios Interceptors](https://axios-http.com/docs/interceptors)
+- [Expo Location](https://docs.expo.dev/versions/latest/sdk/location/)
+- [NetInfo](https://github.com/react-native-netinfo/react-native-netinfo)

@@ -1,26 +1,50 @@
-import * as Device from 'expo-device';
+import * as Location from 'expo-location';
+import * as Camera from 'expo-camera';
 import { Platform } from 'react-native';
+import { Env } from '@/core/config/env';
 
-/**
- * Hook để kiểm tra xem có an toàn để gọi Native Module không
- * Giúp tránh crash trên Antigravity / Simulator
- * 
- * ✅ CRITICAL: Luôn check trước khi gọi GPS/Camera
- */
 export const useSafeHardware = () => {
-    const isRealDevice = Device.isDevice && Platform.OS !== 'web';
+    const isMock = Env.EXPO_PUBLIC_IS_MOCK === 'true' || Platform.OS === 'web';
+
+    const getLocation = async () => {
+        if (isMock) {
+            console.log('📍 [MOCK] Location requested -> Returning Vinh City');
+            return {
+                coords: {
+                    latitude: 18.6789,
+                    longitude: 105.6789,
+                    accuracy: 10,
+                    altitude: null,
+                    altitudeAccuracy: null,
+                    heading: null,
+                    speed: null,
+                },
+                timestamp: Date.now(),
+                mocked: true,
+            };
+        }
+
+        // Real Native Call
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+            throw new Error('Permission denied');
+        }
+        return await Location.getCurrentPositionAsync({});
+    };
+
+    const requestCameraPermission = async () => {
+        if (isMock) {
+            console.log('📷 [MOCK] Camera permission -> Granted');
+            return { status: 'granted', mocked: true };
+        }
+
+        const { status } = await Camera.requestCameraPermissionsAsync();
+        return { status, mocked: false };
+    };
 
     return {
-        isRealDevice,
-
-        // Mock Data khi chạy trên máy ảo
-        mockGPS: {
-            latitude: 10.8231, // Tọa độ Quốc Việt
-            longitude: 106.6297,
-            accuracy: 5,
-        },
-
-        // Mock Image (1x1 black pixel)
-        mockImage: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        getLocation,
+        requestCameraPermission,
+        isMock
     };
 };
